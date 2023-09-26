@@ -44,7 +44,7 @@ builder.Services.AddScoped<IRepository<Doc>, DocSqliteRepository>();
 builder.Services.AddSingleton(new SkService());
 builder.Services.AddSingleton(new FileUtilityService());
 builder.Services.AddSingleton(new TextUtilityService());
-builder.Services.AddSingleton<IExtractText<PDFFileType>, PdfExtractService>();
+builder.Services.AddSingleton<IExtractText<PdfFileType>, PdfExtractService>();
 builder.Services.AddSingleton<IExtractText<TextFileType>, TextFileExtractService>();
 
 // Configure Semantic Kernel
@@ -182,71 +182,43 @@ app.MapPost("/api/summarize", async ([FromBody] SummarizeRequest request) =>
 app.MapPost("/api/doc/ingest/{url}", async (HttpClient client,
     string? url,
     IRepository<Doc> repository,
-    SkService service) =>
+    SkService service,
+    IExtractText<TextFileType> textFileService,
+    IExtractText<PdfFileType> pdfFileService
+     ) =>
 {
     url = HttpUtility.UrlDecode(url);
-    var fileName = Path.GetFileName(url);
-
     if (string.IsNullOrEmpty(url))
+        return Results.BadRequest();
+
+    var fileName = Path.GetFileName(url);
+    var ext = Path.GetExtension(fileName).ToLower();
+    string content = string.Empty;
+    if (ext == ".pdf")
+    {
+        // Process PDF
+        content = await pdfFileService.ExtractTextFromUrl(client, url, appConfig.TMP_DOC_FOLDER);
+    }
+    else if (ext == ".txt" || ext == ".md")
+    {
+        // Process a Text File
+        content = await textFileService.ExtractTextFromUrl(client, url, appConfig.TMP_DOC_FOLDER);
+    }
+    else
     {
         return Results.BadRequest();
     }
 
-    string filePath = "./temp/" + fileName;//Guid.NewGuid() + ".pdf";
-    StringBuilder? sb = null;
-    try
-    {
-        using var stream = await client.GetStreamAsync(url);
-
-        using (var file = File.Create(filePath))
-        {
-            // create a new file to write to
-            await stream.CopyToAsync(file); // copy that stream to the file stream
-            await file.FlushAsync(); // flush back to disk before disposing
-        }
-
-        // The PdfDocument instance
-        sb = new StringBuilder();
-        using PdfDocument document = PdfDocument.Open(filePath);
-        foreach (var page in document.GetPages())
-        {
-            //string pageText = page.Text;
-            var pageText = ContentOrderTextExtractor.GetText(page, true);
-            sb.Append(pageText);
-
-            // foreach (var word in page.GetWords())
-            // {
-            //     sb.Append(word.Text);
-            // }
-        }
-    }
-    catch (Exception)
-    {
-        Results
-        .StatusCode((int)HttpStatusCode.InternalServerError);
-    }
-    finally
-    {
-        // If a file was created, delete it
-        try
-        {
-            File.Delete(filePath);
-        }
-        catch { }
-    }
-
-    string? pdfContent = sb?.ToString();
-
     var memoryRecords = new List<Memory>();
-    if (!string.IsNullOrEmpty(fileName) && !string.IsNullOrEmpty(pdfContent))
+    if (!string.IsNullOrEmpty(content))
     {
         await repository.UpsertAsync(DOC_COLLECTION, fileName, fileName, url);
-        var chunks = ChunkText(pdfContent, MAX_CHUNK_SIZE);
+        var chunks = ChunkText(content, MAX_CHUNK_SIZE);
         var totalChunks = chunks.Count;
 
         for (var i = 0; i < totalChunks; i++)
         {
-            var record = new Memory(BLOC_COLLECTION, $"{fileName}-{i + 1}-{totalChunks}", chunks[i]);
+            var record = new Memory(BLOC_COLLECTION, $"{fileName}-{totalChunks}-{i + 1}", chunks[i]);
             memoryRecords.Add(record);
             await service.SkSaveMemoryAsync(kernel, record, memorySkill);
         }

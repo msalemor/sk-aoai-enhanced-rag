@@ -5,9 +5,9 @@ using UglyToad.PdfPig;
 using UglyToad.PdfPig.DocumentLayoutAnalysis.TextExtractor;
 
 namespace server.Services;
-public class PdfExtractService : ExtractTextBaseService<PDFFileType>
+public class PdfExtractService : ExtractTextBaseService<PdfFileType>
 {
-    private const string Paragraph_Marker = "--xx--";
+    private const string Paragraph_Marker = "[xx]";
 
     public PdfExtractService(FileUtilityService fileService) : base(fileService)
     {
@@ -32,7 +32,7 @@ public class PdfExtractService : ExtractTextBaseService<PDFFileType>
         result.Replace("\n\n", Paragraph_Marker);
         result.Replace("\n", " ");
         result.Replace(Paragraph_Marker, "\n\n");
-        result = Regex.Replace(result, @"\s+", " ");
+        //result = Regex.Replace(result, @"\s+", " ");
 
         return result;
     }

@@ -4,6 +4,7 @@ using Microsoft.SemanticKernel;
 using Microsoft.SemanticKernel.Memory;
 using Microsoft.SemanticKernel.Skills.Core;
 using server.Models;
+using server.Repositories;
 
 namespace server.Services;
 
@@ -61,4 +62,23 @@ public class SkService
         });
         return new Completion(query.query, result.ToString(), result.ModelResults.LastOrDefault()?.GetOpenAIChatResult()?.Usage);
     }
+
+    // TODO: Turn SkService into a plugable service
+    // public async Task SaveMemories(IKernel kernel, TextMemorySkill memorySkill, IRepository<Doc> repository, TextUtilityService textService, string fileName, string content)
+    // {
+    //     var memoryRecords = new List<Memory>();
+    //     if (!string.IsNullOrEmpty(content))
+    //     {
+    //         await repository.UpsertAsync(DOC_COLLECTION, fileName, fileName, url);
+    //         var chunks = textService.ChunkText(content, MAX_CHUNK_SIZE);
+    //         var totalChunks = chunks.Count;
+
+    //         for (var i = 0; i < totalChunks; i++)
+    //         {
+    //             var record = new Memory(BLOC_COLLECTION, $"{fileName}-{totalChunks}-{i + 1}", chunks[i]);
+    //             memoryRecords.Add(record);
+    //             await SkSaveMemoryAsync(kernel, record, memorySkill);
+    //         }
+    //     }
+    // }
 }

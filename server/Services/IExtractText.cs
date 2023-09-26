@@ -1,6 +1,6 @@
 namespace server.Services;
 
-public class PDFFileType { }
+public class PdfFileType { }
 public class TextFileType { }
 
 
