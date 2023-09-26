@@ -1,6 +1,6 @@
 using System.Data.Entity;
 using server.Models;
-using server.Utilities;
+using server.Services;
 
 namespace server.Repositories;
 
@@ -16,9 +16,9 @@ public class DocSqliteRepository : IRepository<Doc>
     public const string TABLE_DEFINITION = @"CREATE TABLE IF NOT EXISTS Doc (collection TEXT NOT NULL, key TEXT NOT NULL, description TEXT NOT NULL, location TEXT NULL, PRIMARY KEY(collection,key)) WITHOUT ROWID";
 
 
-    public readonly SqliteDbUtility DatabaseUtil;
+    public readonly SqliteDbService DatabaseUtil;
 
-    public DocSqliteRepository(SqliteDbUtility dbUtil)
+    public DocSqliteRepository(SqliteDbService dbUtil)
     {
         DatabaseUtil = dbUtil;
     }

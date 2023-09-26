@@ -4,4 +4,5 @@ obj
 .env
 *.db
 *.sqlite
-temp/*
+*.txt
+*.pdf

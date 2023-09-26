@@ -3,17 +3,19 @@ using System.Text.Json;
 using Microsoft.SemanticKernel;
 using Microsoft.SemanticKernel.Memory;
 using Microsoft.SemanticKernel.Skills.Core;
+using server.Models;
 
-namespace server.Utilities;
+namespace server.Services;
 
-public static class SkUtilities
+public class SkService
 {
-    public static async Task<string> SkMemoryGetAsync(string collection, string key, TextMemorySkill memorySkill)
+    public string DocPath { get; set; } = null!;
+    public async Task<string> SkMemoryGetAsync(string collection, string key, TextMemorySkill memorySkill)
     {
         return await memorySkill.RetrieveAsync(collection, key, null);
     }
 
-    public static async Task<string> SkSaveMemoryAsync(IKernel kernel, MemoryRecord memory, TextMemorySkill memorySkill)
+    public async Task<string> SkSaveMemoryAsync(IKernel kernel, Memory memory, TextMemorySkill memorySkill)
     {
         var skMemory = await memorySkill.RetrieveAsync(memory.collection, memory.key, null);
         if (skMemory is not null)
@@ -26,7 +28,7 @@ public static class SkUtilities
         return await kernel.Memory.SaveInformationAsync(memory.collection, memory.text, memory.key, parts[0], json);
     }
 
-    public static async Task<bool> SkDeleteMemoryAsync(IKernel kernel, MemoryRecord memory)
+    public async Task<bool> SkDeleteMemoryAsync(IKernel kernel, Memory memory)
     {
         try
         {
@@ -40,10 +42,10 @@ public static class SkUtilities
         return false;
     }
 
-    public static async Task<Completion> SkQueryAsync(IKernel kernel, Query query)
+    public async Task<Completion> SkQueryAsync(IKernel kernel, Query query)
     {
         IAsyncEnumerable<MemoryQueryResult> queryResults =
-           kernel.Memory.SearchAsync(query.collection, query.query, limit: query.limit, minRelevanceScore: query.minRelevanceScore);
+            kernel.Memory.SearchAsync(query.collection, query.query, limit: query.limit, minRelevanceScore: query.minRelevanceScore);
 
         var promptData = new StringBuilder();
         await foreach (MemoryQueryResult r in queryResults)

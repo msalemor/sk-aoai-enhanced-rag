@@ -1,17 +1,17 @@
 using System.Data.SQLite;
 using server.Models;
 
-namespace server.Utilities
+namespace server.Services
 {
-    public class SqliteDbUtility
+    public class SqliteDbService
     {
         private string ConnectionString { get; set; } = null!;
 
-        public SqliteDbUtility() { }
+        public SqliteDbService() { }
 
-        public static SqliteDbUtility GetInstance(string connectionString)
+        public static SqliteDbService GetInstance(string connectionString)
         {
-            return new SqliteDbUtility { ConnectionString = connectionString };
+            return new SqliteDbService { ConnectionString = connectionString };
         }
 
         public async Task CreateTableAsync(string tableDefinition)

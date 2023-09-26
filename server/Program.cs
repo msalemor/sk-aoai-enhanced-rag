@@ -8,12 +8,12 @@ using Microsoft.SemanticKernel.Orchestration;
 using Microsoft.SemanticKernel.SkillDefinition;
 using Microsoft.SemanticKernel.Skills.Core;
 using Microsoft.SemanticKernel.Text;
-using server.Models;
 using server.Repositories;
-using server.Utilities;
+using server.Services;
 using System.Net;
 using UglyToad.PdfPig;
 using UglyToad.PdfPig.DocumentLayoutAnalysis.TextExtractor;
+using server.Models;
 
 // https://alemoraoaist.z13.web.core.windows.net/docs/Contoso-Company_Benefits.pdf
 // https://alemoraoaist.z13.web.core.windows.net/docs/Contoso-401K_Policy.pdf
@@ -26,40 +26,32 @@ const int MAX_CHUNK_SIZE = 512;
 
 var builder = WebApplication.CreateBuilder(args);
 
-#region Read the environment variables
+#region Read amd validate the environment variables
 
-// Read settings
-DotEnv.Load();
-var gptDeploymentName = Environment.GetEnvironmentVariable("GPT_DEPLOYMENT_NAME") ?? "";
-var adaDeploymentName = Environment.GetEnvironmentVariable("ADA_DEPLOYMENT_NAME") ?? "";
-var endpoint = Environment.GetEnvironmentVariable("ENDPOINT") ?? "";
-var apiKey = Environment.GetEnvironmentVariable("API_KEY") ?? "";
-var DB_PATH = Environment.GetEnvironmentVariable("SQLITE_DB_PATH") ?? "";
-
-// Validate settings
-if (string.IsNullOrEmpty(gptDeploymentName) || string.IsNullOrEmpty(adaDeploymentName) || string.IsNullOrEmpty(endpoint) || string.IsNullOrEmpty(apiKey) || string.IsNullOrEmpty(adaDeploymentName) || string.IsNullOrEmpty(DB_PATH))
-{
-    Console.WriteLine("Please set the following environment variables: GPT_DEPLOYMENT_NAME, ADA_DEPLOYMENT_NAME, ENDPOINT, API_KEY, SQLITE_DB_PATH");
-    Environment.Exit(1);
-}
+var appConfig = new AppConfigService();
 
 #endregion
 
 #region Get an application builder and configure Semantic Kernel
 
-var connectionString = "Data Source=" + DB_PATH;
-var sqlDbUtil = SqliteDbUtility.GetInstance(connectionString);
-Console.WriteLine(connectionString);
+var connectionString = "Data Source=" + appConfig.DB_PATH;
+var sqlDbUtil = SqliteDbService.GetInstance(connectionString);
 await sqlDbUtil.CreateTableAsync(DocSqliteRepository.TABLE_DEFINITION);
+builder.Services.AddSingleton(appConfig);
 builder.Services.AddSingleton(sqlDbUtil);
 builder.Services.AddHttpClient();
 builder.Services.AddScoped<IRepository<Doc>, DocSqliteRepository>();
+builder.Services.AddSingleton(new SkService());
+builder.Services.AddSingleton(new FileUtilityService());
+builder.Services.AddSingleton(new TextUtilityService());
+builder.Services.AddSingleton<IExtractText<PDFFileType>, PdfExtractService>();
+builder.Services.AddSingleton<IExtractText<TextFileType>, TextFileExtractService>();
 
 // Configure Semantic Kernel
-var sqliteStore = await SqliteMemoryStore.ConnectAsync(DB_PATH);
+var sqliteStore = await SqliteMemoryStore.ConnectAsync(appConfig.DB_PATH);
 IKernel kernel = new KernelBuilder()
-    .WithAzureChatCompletionService(gptDeploymentName, endpoint, apiKey)
-    .WithAzureTextEmbeddingGenerationService(adaDeploymentName, endpoint, apiKey)
+    .WithAzureChatCompletionService(appConfig.gptDeploymentName, appConfig.endpoint, appConfig.apiKey)
+    .WithAzureTextEmbeddingGenerationService(appConfig.adaDeploymentName, appConfig.endpoint, appConfig.apiKey)
     .WithMemoryStorage(sqliteStore)
     .Build();
 var memorySkill = new TextMemorySkill(kernel.Memory);
@@ -187,7 +179,10 @@ app.MapPost("/api/summarize", async ([FromBody] SummarizeRequest request) =>
 
 #region Docs
 
-app.MapPost("/api/doc/ingest/{url}", async (HttpClient client, string? url, IRepository<Doc> repository) =>
+app.MapPost("/api/doc/ingest/{url}", async (HttpClient client,
+    string? url,
+    IRepository<Doc> repository,
+    SkService service) =>
 {
     url = HttpUtility.UrlDecode(url);
     var fileName = Path.GetFileName(url);
@@ -242,7 +237,7 @@ app.MapPost("/api/doc/ingest/{url}", async (HttpClient client, string? url, IRep
 
     string? pdfContent = sb?.ToString();
 
-    var memoryRecords = new List<MemoryRecord>();
+    var memoryRecords = new List<Memory>();
     if (!string.IsNullOrEmpty(fileName) && !string.IsNullOrEmpty(pdfContent))
     {
         await repository.UpsertAsync(DOC_COLLECTION, fileName, fileName, url);
@@ -251,9 +246,9 @@ app.MapPost("/api/doc/ingest/{url}", async (HttpClient client, string? url, IRep
 
         for (var i = 0; i < totalChunks; i++)
         {
-            var record = new MemoryRecord(BLOC_COLLECTION, $"{fileName}-{i + 1}-{totalChunks}", chunks[i]);
+            var record = new Memory(BLOC_COLLECTION, $"{fileName}-{i + 1}-{totalChunks}", chunks[i]);
             memoryRecords.Add(record);
-            await SkUtilities.SkSaveMemoryAsync(kernel, record, memorySkill);
+            await service.SkSaveMemoryAsync(kernel, record, memorySkill);
         }
     }
 
@@ -310,14 +305,14 @@ app.MapDelete("/api/doc/{collection}/{key}", async (string collection, string ke
 
 // Routes
 //"benefits.pdf-1..10"
-app.MapGet("/api/gpt/memory/{collection}/{id}", async (string collection, string key) =>
+app.MapGet("/api/gpt/memory/{collection}/{id}", async (string collection, string key, SkService service) =>
 {
-    var result = await SkUtilities.SkMemoryGetAsync(collection, key, memorySkill);
+    var result = await service.SkMemoryGetAsync(collection, key, memorySkill);
     if (string.IsNullOrEmpty(result))
     {
         return Results.NotFound();
     }
-    var memoryResponse = new MemoryRecord(collection, key, result);
+    var memoryResponse = new Memory(collection, key, result);
     return Results.Ok(memoryResponse);
 })
 .WithName("GetMemory")
@@ -325,9 +320,9 @@ app.MapGet("/api/gpt/memory/{collection}/{id}", async (string collection, string
 
 // Note: It is up to the calling application to implement the text extraction and chunking logic
 // Note: Pass a document name with a content
-app.MapPost("/api/gpt/memory", async ([FromBody] MemoryRecord memory) =>
+app.MapPost("/api/gpt/memory", async ([FromBody] Memory memory, SkService service) =>
 {
-    var result = await SkUtilities.SkSaveMemoryAsync(kernel, memory, memorySkill);
+    var result = await service.SkSaveMemoryAsync(kernel, memory, memorySkill);
     if (string.IsNullOrEmpty(result))
     {
         return Results.BadRequest();
@@ -337,9 +332,9 @@ app.MapPost("/api/gpt/memory", async ([FromBody] MemoryRecord memory) =>
 .WithName("PostMemory")
 .WithOpenApi();
 
-app.MapDelete("/api/gpt/memory", async ([FromBody] MemoryRecord memory) =>
+app.MapDelete("/api/gpt/memory", async ([FromBody] Memory memory, SkService service) =>
 {
-    var result = await SkUtilities.SkDeleteMemoryAsync(kernel, memory);
+    var result = await service.SkDeleteMemoryAsync(kernel, memory);
     if (!result)
     {
         return Results.BadRequest();
@@ -349,9 +344,9 @@ app.MapDelete("/api/gpt/memory", async ([FromBody] MemoryRecord memory) =>
 .WithName("DeleteMemory")
 .WithOpenApi();
 
-app.MapPost("/api/gpt/query", async ([FromBody] Query query) =>
+app.MapPost("/api/gpt/query", async ([FromBody] Query query, SkService service) =>
 {
-    var completion = await SkUtilities.SkQueryAsync(kernel, query);
+    var completion = await service.SkQueryAsync(kernel, query);
     return Results.Ok(completion);
 })
 .WithName("PostQuery")
@@ -367,13 +362,32 @@ app.Run();
 
 #endregion
 
-#region Support models definition
+public class AppConfigService
+{
+    public string gptDeploymentName { get; private set; }
 
-public record MemoryRecord(string collection, string key, string text, string? metadata = null);
-public record Query(string collection, string query, int maxTokens = 1000, int limit = 3, double minRelevanceScore = 0.77);
-public record Completion(string query, string text, object? usage);
-public record SummarizeRequest(string prompt, string content, int chunk_size, int max_tokens, double temperature);
-public record CompletionResponse(string content, List<Summary> summaries);
-public record Summary(string content, string summary);
+    public string adaDeploymentName { get; private set; }
+    public string endpoint { get; private set; }
+    public string apiKey { get; private set; }
+    public string DB_PATH { get; private set; }
+    public string TMP_DOC_FOLDER { get; private set; }
 
-#endregion
+    public AppConfigService()
+    {
+        DotEnv.Load();
+
+        gptDeploymentName = Environment.GetEnvironmentVariable("GPT_DEPLOYMENT_NAME") ?? "";
+        adaDeploymentName = Environment.GetEnvironmentVariable("ADA_DEPLOYMENT_NAME") ?? "";
+        endpoint = Environment.GetEnvironmentVariable("ENDPOINT") ?? "";
+        apiKey = Environment.GetEnvironmentVariable("API_KEY") ?? "";
+        DB_PATH = Environment.GetEnvironmentVariable("SQLITE_DB_PATH") ?? "./data/db/vectors.sqlite";
+        TMP_DOC_FOLDER = Environment.GetEnvironmentVariable("TMP_DOC_PATH") ?? "./data/docs/";
+
+        if (string.IsNullOrEmpty(gptDeploymentName) || string.IsNullOrEmpty(adaDeploymentName) || string.IsNullOrEmpty(endpoint) || string.IsNullOrEmpty(apiKey) || string.IsNullOrEmpty(adaDeploymentName) || string.IsNullOrEmpty(DB_PATH))
+        {
+            Console.WriteLine("Please set the following environment variables: GPT_DEPLOYMENT_NAME, ADA_DEPLOYMENT_NAME, ENDPOINT, API_KEY, SQLITE_DB_PATH");
+            Environment.Exit(1);
+        }
+    }
+
+}
