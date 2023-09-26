@@ -1,0 +1,7 @@
+bin
+obj
+*.bak
+.env
+*.db
+*.sqlite
+temp/*
