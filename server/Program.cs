@@ -10,10 +10,8 @@ using Microsoft.SemanticKernel.Skills.Core;
 using Microsoft.SemanticKernel.Text;
 using server.Repositories;
 using server.Services;
-using System.Net;
-using UglyToad.PdfPig;
-using UglyToad.PdfPig.DocumentLayoutAnalysis.TextExtractor;
 using server.Models;
+using System.Collections.ObjectModel;
 
 // https://alemoraoaist.z13.web.core.windows.net/docs/Contoso-Company_Benefits.pdf
 // https://alemoraoaist.z13.web.core.windows.net/docs/Contoso-401K_Policy.pdf
@@ -21,7 +19,7 @@ using server.Models;
 // https://alemoraoaist.z13.web.core.windows.net/docs/Contoso-Resignation_Policy.pdf
 
 const string DOC_COLLECTION = "docs";
-const string BLOC_COLLECTION = "blob";
+const string BLOB_COLLECTION = "blob";
 const int MAX_CHUNK_SIZE = 512;
 
 var builder = WebApplication.CreateBuilder(args);
@@ -56,6 +54,9 @@ IKernel kernel = new KernelBuilder()
     .Build();
 var memorySkill = new TextMemorySkill(kernel.Memory);
 kernel.ImportSkill(memorySkill);
+
+builder.Services.AddSingleton(kernel);
+builder.Services.AddSingleton(memorySkill);
 
 #endregion
 
@@ -218,7 +219,7 @@ app.MapPost("/api/doc/ingest/{url}", async (HttpClient client,
 
         for (var i = 0; i < totalChunks; i++)
         {
-            var record = new Memory(BLOC_COLLECTION, $"{fileName}-{totalChunks}-{i + 1}", chunks[i]);
+            var record = new Memory(BLOB_COLLECTION, $"{fileName}-{totalChunks}-{i + 1}", chunks[i]);
             memoryRecords.Add(record);
             await service.SkSaveMemoryAsync(kernel, record, memorySkill);
         }
@@ -323,6 +324,32 @@ app.MapPost("/api/gpt/query", async ([FromBody] Query query, SkService service) 
 })
 .WithName("PostQuery")
 .WithOpenApi();
+
+app.MapPost("/api/gpt/summarize", async ([FromBody] GptSummarizeRequest request, SkService service) =>
+{
+    var key = request.key;
+    var collection = BLOB_COLLECTION;
+    var sb = new StringBuilder();
+
+    // Recall the memories and augment the prompt
+    var parts = key.Split("-");
+    var totalChunks = int.Parse(parts[2]);
+    var currentChunk = int.Parse(parts[3]);
+    for (var i = 0; i < totalChunks; i++)
+    {
+        var chunkKey = $"{parts[0]}-{parts[1]}-{totalChunks}-{i + 1}";
+        var content = await service.SkMemoryGetAsync(collection, chunkKey, memorySkill);
+        sb.Append(content + "\n\n");
+    }
+    //sb.Append(await service.SkMemoryGetAsync(collection, key, memorySkill));
+    var prompt = request.prompt + "\n\nText: \"\"\"" + sb.ToString() + "\nUse only the provided text.";
+    var fixedFunction = kernel.CreateSemanticFunction(prompt, maxTokens: request.max_tokens, temperature: request.temperature);
+    var result = await kernel.RunAsync(fixedFunction);
+    return Results.Ok(new Completion(prompt, "", null, null, result.ToString()));
+})
+.WithName("PostGptSummary")
+.WithOpenApi();
+
 
 #endregion
 
